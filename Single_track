@@ -25,10 +25,12 @@ R = [sigma2_r 0;
      0 sigma2_theta];
 
 %Bias
-beta = [100 7e-4 1e-3 2e-3]';
+beta = [200 7e-4 1e-3 2e-3]';
 
 %Initial state
-X = [];
+X = [20e4 20e4 20 20]';
+
+%{
 for i=1:32
     if(i<=8)
         X = [X [-20e4 10e4*i 20 20]'];
@@ -40,6 +42,7 @@ for i=1:32
         X = [X [20e4 (i-24)*10e4 20 20]'];
     end
 end
+%}
 state = [];
 radar_unbiased = [];
 radar_biased = [];
@@ -54,8 +57,6 @@ R_diag = [];
 M = 50;
 
 for i = 1:M
-    for j=1:32
-    end
     v = Q * normrnd(0,1,[4,1]);
     X = F*X + v;
     state = [state X];  
@@ -106,7 +107,7 @@ end
 P = 40*eye(4);
 %measurmement covariance 
 R = [10 0;0 0.1];
-x = [10e4 10e4 25 25]';
+x = [20e4 20e4 20 20]';
 track = [];
 for z=radar_biased(1:2,:)
     %one step estimate 
@@ -130,7 +131,7 @@ for z=radar_biased(1:2,:)
     track = [track x];
 end
 
-for i=1:100
+for i=1:M
     x = track(1,i);
     y = track(2,i);
     r = sqrt(x^2 + y^2);
@@ -153,7 +154,7 @@ for i=1:100
     R_diag(2*i-1:2*i,2*i-1:2*i) = R_i;
 end
 
-for i=1:100
+for i=1:M
     %Getting bias from synchronous radar and gps measurements
     Z_diff = [Z_diff; [track(1:2,i) - gps(1:2,i)]];
 end
@@ -165,5 +166,4 @@ hold on;
 plot(track(1,:),track(2,:),'r');
 hold off
 %Bias Estimation
-beta_calc = inv((H_stack)'*inv(R_diag)*H_stack)*(H_stack)'*inv(R_diag)*Z_diff;
-X1
+beta_calc = inv((H_stack)'*inv(R_diag)*H_stack)*(H_stack)'*inv(R_diag)*Z_diff
