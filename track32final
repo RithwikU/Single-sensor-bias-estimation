@@ -1,0 +1,239 @@
+%Sampling time
+T = 0.5;
+
+%Number of points
+M = 50;
+
+%Transition matrix
+F = [1 0 T 0;
+     0 1 0 T;
+     0 0 1 0;
+     0 0 0 1];
+
+%Process noise covariance
+Qx = 6*[0.5*T*T (2/3)*T*T*T;
+      T 0.5*T*T];
+Q = [Qx zeros(2,2);
+     zeros(2,2) Qx];
+
+%Measurement matrix
+H = [1 0 0 0;
+     0 1 0 0];
+
+%Measurement noise covariance R
+sigma2_r = 100;
+sigma2_theta = 1e-3;
+
+R = [sigma2_r 0;
+     0 sigma2_theta];
+
+%Bias
+beta = [20 2e-3 3e-5 2e-4]';
+
+%Initial state
+X_init= [];
+for i=1:32
+    if(i<=8)
+        X_init = [X_init [-1e2 10e2*i 20 20]'];
+    elseif(i<=16)
+        X_init = [X_init [1e2 (i-8)*10e2 20 20]'];
+    elseif(i<=24)
+        X_init = [X_init [9e2 (i-16)*10e2 20 20]'];
+    else
+        X_init = [X_init [11e2 (i-24)*10e2 20 20]'];
+    end
+end
+size(X_init);
+state = X_init;
+radar_unbiased = [];
+radar_biased = [];
+gps = [];
+Rad = [];
+Theta = [];
+H_stack = [];
+Z_diff = [];
+R_di = [];
+R_diag = [];
+NEES = [];
+Bias = zeros(4,1);
+
+for i = 0:M-1
+    %v = Q * normrnd(0,1,[4,1]);
+    temp = [];
+    gps_temp = [];
+    bias_temp = [];
+    for j=1:32
+        v = Q * normrnd(0,2,[4,1]);
+        X1 = F*state(:,i*32+j) + v;
+        state = [state X1];  
+        gps_temp = [gps_temp H*X1];
+        Z = H*X1;
+        temp = [temp Z];
+        %radar_unbiased = [radar_unbiased Z];
+    
+        r = sqrt(Z(1,1)^2 + Z(2,1)^2);
+        theta = atan2(Z(2,1),Z(1,1));
+   
+        B = [cos(theta) -r*sin(theta);
+            sin(theta) r*cos(theta)];
+        C = [1 0 r 0;
+             0 1 0 theta];
+     
+        r_biased = r + C(1,:)*beta + sigma2_r*normrnd(0,1);
+        theta_biased = theta + C(2,:)*beta + sigma2_theta*normrnd(0,1);
+
+        Z_biased = [r_biased*cos(theta_biased) ; r_biased*sin(theta_biased)];
+        bias_temp = [bias_temp Z_biased];
+    end
+    radar_unbiased = [radar_unbiased ;temp];
+    gps = [gps ; gps_temp];
+    radar_biased = [radar_biased ;bias_temp];
+end
+
+%state covariance 
+P = 40*eye(4);
+%measurmement covariance 
+R = [10 0;0 0.1];
+x = X_init;
+track = x;
+track_plot = x;
+
+%Kalmann filter
+for i=0:M-1
+    track1 = [];
+    Bias = zeros(4,1);
+    for j=1:32
+        z = radar_biased(2*i+1:2*i+2,j);
+  
+        %one step estimate 
+        x_hat = F*track_plot(4*i+1:4*i+4,j);
+        P_hat = F*P*F';
+
+        %meaurement estimate 
+        z_hat = H*track_plot(4*i+1:4*i+4,j);
+
+        %innovation and its covariance 
+        v = z - z_hat;
+        S = H*P*H'+ R;
+
+        %filter gain 
+        W = P*H'*pinv(S);
+
+        %updated estimates 
+        x = x_hat + W*v;
+        P = P - W*S*W'; 
+        
+        
+        track = [track x];
+        track1 = [track1 x];
+        
+        
+        
+        x = track_plot(4*i+1,j);
+        y = track_plot(4*i+2,j);
+        r = sqrt(x^2 + y^2);
+        theta = atan2(y,x);
+        B = [cos(theta) -r*sin(theta);
+            sin(theta) r*cos(theta)];
+        C = [1 0 r 0;
+             0 1 0 theta];
+        
+        H_stack = [H_stack ; B*C];
+
+
+        ri2 = r^2;
+        sin2 = sin(theta)^2;
+        cos2 = cos(theta)^2;
+        sine = sin(theta);
+        cosine = cos(theta);
+        R_i=[ri2*sigma2_theta*sin2+sigma2_r*cos2   (sigma2_r-ri2*sigma2_theta)*sine*cosine; 
+            (sigma2_r-ri2*sigma2_theta)*sine*cosine  ri2*sigma2_theta*cos2+sigma2_r*sin2];
+        R_di(2*j-1:2*j,2*j-1:2*j) = R_i;
+        
+        %Getting bias from synchronous radar and gps measurements
+        diff_temp = track_plot(4*i+1:4*i+2,j) - gps(2*i+1:2*i+2,j);
+        Z_diff = [Z_diff; diff_temp];
+    end
+    %P1 = H_stack'*inv(R_diag)*H_stack;
+    R_diag(64*i+1:64*i+64,64*i+1:64*i+64) = R_di;
+    P1 = H_stack'*inv(R_diag)*H_stack;
+    track_plot=[track_plot; track1];
+    Bias = inv((H_stack)'*inv(R_diag)*(H_stack))*(H_stack)'*inv(R_diag)*Z_diff;
+    error = beta - Bias;
+    NEES = [NEES error'*inv(P1)*error];
+end
+
+track_plot = track_plot(5:204,:);
+
+%{
+for i=0:M-1
+    for j=1:32
+        x = track_plot(4*i+1,j);
+        y = track_plot(4*i+2,j);
+        r = sqrt(x^2 + y^2);
+        theta = atan2(y,x);
+        B = [cos(theta) -r*sin(theta);
+            sin(theta) r*cos(theta)];
+        C = [1 0 r 0;
+             0 1 0 theta];
+     
+        H_stack = [H_stack ; B*C];
+
+
+        ri2 = r^2;
+        sin2 = sin(theta)^2;
+        cos2 = cos(theta)^2;
+        sine = sin(theta);
+        cosine = cos(theta);
+        R_i=[ri2*sigma2_theta*sin2+sigma2_r*cos2   (sigma2_r-ri2*sigma2_theta)*sine*cosine; 
+            (sigma2_r-ri2*sigma2_theta)*sine*cosine  ri2*sigma2_theta*cos2+sigma2_r*sin2];
+        R_di(2*j-1:2*j,2*j-1:2*j) = R_i;
+    end
+    R_diag(64*i+1:64*i+64,64*i+1:64*i+64) = R_di;
+end
+
+
+for i=0:M-1
+    for j=1:32
+        %Getting bias from synchronous radar and gps measurements
+        Z_diff = [Z_diff; [track_plot(4*i+1:4*i+2,j) - gps(2*i+1:2*i+2,j)]];
+        %Z_diff = [Z_diff; [gps(2*i+1:2*i+2,j)-track_plot(4*i+1:4*i+2,j)]];
+    end
+end
+%}
+
+%plot([1:M],NEES);
+
+%/{
+plot(gps(1:2:M-1,1),gps(2:2:M,1));
+hold on;
+plot(radar_biased(1:2:M-1,1),radar_biased(2:2:M,1),'g');
+hold on;
+plot(track_plot(1:4:M-1,1),track_plot(2:4:M,1),'r');
+hold on;
+%}
+
+%/{
+for i=1:32
+    plot(radar_unbiased(1:2:M-1,i),radar_unbiased(2:2:M,i));
+    hold on;
+end
+
+for i=1:32
+    plot(track_plot(1:4:M-1,i),track_plot(2:4:M,i));
+    hold on;
+end
+
+for i=1:32
+    plot(track_plot(1:4:M-1,i),track_plot(2:4:M,i));
+    hold on;
+end
+%}
+%plot(gps(1,:),gps(2,:),'b');
+hold on; 
+%plot(radar_biased(1,:),radar_biased(2,:),'g');
+hold on;
+%plot(track(1,:),track(2,:),'r');
+hold off
+%Bias Estimation
+beta_calc = inv((H_stack)'*inv(R_diag)*H_stack)*(H_stack)'*inv(R_diag)*Z_diff
